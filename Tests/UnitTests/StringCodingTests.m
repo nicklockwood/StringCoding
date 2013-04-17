@@ -34,11 +34,27 @@
     NSAssert([input charValue] == output, @"charValue failed");
 }
 
+- (void)testUnsignedCharValue
+{
+    //large value
+    NSString *input = @"245";
+    unsigned char output = 245;
+    NSAssert((unsigned char)[input charValue] == output, @"unsignedCharValue failed");
+}
+
 - (void)testClassValue
 {
     NSString *input = @"NSArray";
     Class output = [NSArray class];
     NSAssert([input classValue] == output, @"classValue failed");
+}
+
+- (void)testSelectorValue
+{
+    //large value
+    NSString *input = @"stringWithFormat:";
+    SEL output = @selector(stringWithFormat:);
+    NSAssert([input selectorValue] == output, @"selectorValue failed");
 }
 
 - (void)testNSURLValue

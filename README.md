@@ -1,9 +1,15 @@
 Purpose
 --------------
 
-StringCoding is a simple library for setting object properties of any type using string values. It can automatically detect the property type and attempt to interpret the string as the right kind of value.
+StringCoding is a simple library for Mac and iOS that supports setting object properties of any type using string values. It can automatically detect the property type and attempt to interpret the string as the right kind of value.
 
 StringCoding is really handy for creating configuration files for quickly tweaking properties of your app without needing to recompile.
+
+StringCoding is specialised towards configuring UIKit views and controls. A typical use case is the creation of plist or json "stylesheets" for configuring app appearance. This can be very useful for apps that have multiple themes or "skins".
+
+Unlike other libraries, StringCoding does not add any additional styling properties to views. It is designed to only provide string coding access for existing properties and methods, not extend functionality. Because of the way it works however, it can automatically detect and support additional properties added via categories (see "Adding Support for Additional String Properties and Types" below). For example, if you use the ViewUtils library (https://github.com/nicklockwood/ViewUtils), which extends UIView with explicit detters for width, height, etc. the StringCoding will allow you to set those properties using strings without needing to add explicit support.
+
+Check out the included UIConfig example to see some of StringCoding's capabilities in action.
 
 
 Supported iOS & SDK Versions
@@ -38,6 +44,8 @@ StringCoding extends every object with the following additional methods:
     
 These methods work like the standard KVC setValue:forKey: and setValue:forKeyPath: methods except that the value is always a string and will automatically be converted to the correct type, provided that the type is known. Attempting to set a property of an unknown type will throw an exception. This can be fixed on a per case basis by adding a specific string setter method (see below).
 
+Note: By default, StringCoding swizzles `setValue:forKey:` and `setValue:forKeyPath:` to call the setStringValue equivalents when appropriate. This means that it is not neccesary for you to call setStringValue: explicitly unless you have disabled swizzling using the SC_SWIZZLE_ENABLED macro (see swizzling note below).
+
 
 NSString Extension Methods
 ----------------------------
@@ -51,6 +59,10 @@ Returns YES if the value of the string can be interpreted as a number.
     - (Class)classValue;
     
 Returns the class whose name matches the string, or nil if the class does not exist. Equivalent to the NSClassFromString() function.
+
+    - (SEL)selectorValue;
+    
+Returns a selector matching the string. This can be used to call methods on objects, and is utilised by the target/action binding system for UIControls (see below).
     
     - (char)charValue;
     
@@ -85,8 +97,9 @@ Returns a CGImageRef. The string is interpreted as an image file name, path or U
 Returns a CGFontRef for a font chosen according to the following criteria: If the string matches a font name then it will be returned. If the value is "bold" or "italic" then the appropriate bold or italic system font variant will be returned. Any other value will return the default system font.
 
     - (NSTextAlignment)NSTextAlignmentValue;
-    
-Returns the NSTextAlignment value of the string. The string can contain either a short name like "left" or "justfied" or the fully-qualified name like "NSTextAlignmentLeft". The value is case-insensitive. Legacy UITextAlignment constant names are also supported.
+    - (NSLineBreakMode)NSLineBreakModeValue;
+
+These methods return the NSTextAlignment and NSLineBreakMode values of the string, respectively. The string can contain either a short name like "left" or "justfied" or the fully-qualified name like "NSTextAlignmentLeft". The value is case-insensitive.
 
 
 NSString Extension Methods (UIKit only)
@@ -105,12 +118,36 @@ Returns a UIImage, treating the string as a file name, path or URL. You can opti
 Returns a UIFont using the same logic as for CGFontRefValue, with the additional feature that you can optionally specify the font size by adding a floating point value separatd by a space (e.g. "helvetica 17" or "bold 15"). If you do not specify a font size then the default system font size will be used.
     
     - (UIEdgeInsets)UIEdgeInsetsValue;
+    - (UIOffset)UIOffsetValue;
     
-Returns the UIEdgeInsets value of the string. The string can contain either four space-delimited floating point values, or can be formatted as "{top,left,bottom,right}" (equivalent to the result of calling NSStringFromUIEdgeInsets()).
+Returns the appropriate struct type. The string can contain either space-delimited floating point values, or can be formatted using the appropriate NSStringFromX syntax, e.g. "{top,left,bottom,right}" (equivalent to the result of calling NSStringFromUIEdgeInsets()).
         
     - (UIViewContentMode)UIViewContentModeValue;
+    - (UIViewAutoresizing)UIViewAutoresizingValue;
+    - (UIBaselineAdjustment)UIBaselineAdjustment;
+    - (UIControlState)UIControlStateValue;
+    - (UIControlEvents)UIControlEventsValue;
+    - (UITextBorderStyle)UITextBorderStyleValue;
+    - (UITextFieldViewMode)UITextFieldViewModeValue;
+    - (UIDataDetectorTypes)UIDataDetectorTypesValue;
+    - (UIScrollViewIndicatorStyle)UIScrollViewIndicatorStyleValue;
+    - (UITableViewStyle)UITableViewStyleValue;
+    - (UITableViewScrollPosition)UITableViewScrollPositionValue;
+    - (UITableViewRowAnimation)UITableViewRowAnimationValue;
+    - (UITableViewCellStyle)UITableViewCellStyleValue;
+    - (UITableViewCellSeparatorStyle)UITableViewCellSeparatorStyleValue;
+    - (UITableViewCellSelectionStyle)UITableViewCellSelectionStyleValue;
+    - (UITableViewCellEditingStyle)UITableViewCellEditingStyleValue;
+    - (UITableViewCellAccessoryType)UITableViewCellAccessoryTypeValue;
+    - (UITableViewCellStateMask)UITableViewCellStateMaskValue;
+    - (UIButtonType)UIButtonTypeValue;
+    - (UIBarStyle)UIBarStyleValue;
+    - (UIBarMetrics)UIBarMetricsValue;
+    - (UIBarButtonItemStyle)UIBarButtonItemStyleValue;
+    - (UIBarButtonSystemItem)UIBarButtonSystemItemValue;
+    - (UITabBarSystemItem)UITabBarSystemItemValue;
     
-Returns the UIViewContentModeValue value of the string. The string can contain either a short name like "scaletofill" or the fully-qualified name like "UIViewContentModeScaleAspectFit". The value is case-insensitive.
+Returns the specified enum or bitmask value of the string. For enums, this should be a single value matching the full name of the suffix of the constant value (e.g. "UIViewContentModeScaleAspectFit" or just "scaleaspectfit").  Where appropriate some aliases have been provided for hard-to-remember constants, e.g. "fit" for "scaleaspectfit"). The value is case-insensitive. For bitmask-type values, you can specify multiple values separated by spaces. You can also use "none" or "all".
     
     
 NSString Extension Methods (AppKit only)
@@ -135,10 +172,53 @@ Returns an NSImage, treating the string as a file name, path or URL.
 Returns an NSFont using the same logic as for CGFontRefValue, with the additional feature that you can optionally specify the font size by adding a floating point value separatd by a space (e.g. "helvetica 17" or "bold 15"). If you do not specify a font size then the default system font size will be used.
 
 
+UIControl styling
+--------------------
+
+UIControl subclasses often have style properties that are associated to a particular UIControlState. For example, to set the title color to red for a UIButton, you would use:
+
+    [button setTitleColor:[UIColor redColor] forState:UIControlStateNormal];
+
+StringCoding supports this type of styling using pseudo properties. To set the title color for UIControlStateNormal, you can use either of the following:
+
+    [control setStringValue:@"red" forKey:@"titleColor"];
+    [control setStringValue:@"red" forKey:@"normalTitleColor"];
+    
+To set the color for the selected state, you would use:
+
+    [control setStringValue:@"red" forKey:@"selectedTitleColor"];
+
+And so on. The key in this case *is* case sensitive. This is only a virtual property, not a real one, so you can't set it using:
+
+    control.selectedTitleColor = [UIColor redColor]; //this won't work
+    [control setSelectedTitleColor:[UIColor redColor]]; //nor this
+
+
+UIControl action binding
+---------------------------
+
+To bind an action to a control using a string, you can make use of some pseudo properties provided by StringCoding. For example, to bind a selector called "showAlert:" to the UIControlEventTouchUpInside, you can say:
+
+    [control setStringValue:@"alert:" forKey:@"touchupinside"];
+
+As with other constants, the key is case insensitive and can use the fully qualified (e.g.. "UIControlEventTouchUpInside") or shorthand version. This is only a virtual property, not a real one, so you can't set it using:
+
+    control.touchUpInside = @selector(alert:); //this won't work
+    [control setTouchUpInside:@selector(alert:)]; //nor this
+
+However, assuming you've not disabled swizzling, it can be set using `setValue:forKey:` or `setValue:forKeyPath:`, so this will work:
+
+    [control setValue:@"alert:" forKey:@"touchupinside"];
+
+If you've been paying attention you might wonder how to set the *target* for the action. There is no way to set this explcitly, however it will be determined automatically from the responder chain, so the first containing UIResponder (i.e. UIView, UIViewController) in the chain that responds to the specified selector will receive the message. 
+
+**Note:** this means that you should wait to apply the action until after the view has been added to the controller in question, and if the view is detached and added to another controller, the action should be re-applied.
+
+
 Adding Support for Additional String Properties and Types
 --------------------------------------------------------------
 
-To add support for additional value types, use a category to extend NSString with a new value method of the form:
+StringCoding only supports a finite set of value types. To add support for additional types, use a category to extend NSString with a new value method of the form:
 
     - (<type>)<typeName>Value;
 
@@ -150,7 +230,9 @@ To support Core Foundation object types, omit the "Ref", so for a type like CGFo
 
     - (CGFooRef)CGFooValue;
     
-Any property of this type on any object will now automatically be settable using a string value via the setStringValue:forKey: method. If the property type is unknown then this won't work however. For example, the contents property of CALayer is supposed to be an image, but is defined as an id, so StringCoder can't determine the type automatically. This also applies to properties that expect a constant value, as the type appears as integer or string.
+Any property of this type on any object will now automatically be settable using a string value via the setStringValue:forKey: method. If the property type is unknown then this won't work however. StringCoding will automatically detect and support properties added via categories or subclasses, however it may not always be able to determine the type.
+
+For example, the contents property of CALayer is supposed to be an image, but is defined as an id, so StringCoder can't determine the type automatically. This also applies to properties that expect a constant value, as the type appears as integer or string.
 
 To solve this, you can add a setter method via a category of the form:
 
@@ -161,3 +243,15 @@ So in the case of the CALayer contents property, the method is defined as:
     - (void)setContentsAsString:(NSString *)stringValue;
 
 The implementation treats the value as an image. The setStringValue:forKey: method detects the presence of this method automatically and calls it instead of the default implementation.
+
+
+Swizzling
+-----------------
+
+By default, StringCoding swizzles the `setValue:forKey:` and `setValue:forKeyPath:` methods to enable it to be used more easily (for example, this measn you can set objects by string value in Interface Builder). If you don't want this behaviour then don't panic, you can disable it by adding the following pre-compiler macro to your build settings:
+
+    SC_SWIZZLE_ENABLED=0
+
+Or if you prefer, add this to your prefix.pch file:
+
+    #define SC_SWIZZLE_ENABLED 0

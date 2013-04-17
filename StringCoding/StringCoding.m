@@ -1,7 +1,7 @@
 //
 //  StringCoding.m
 //
-//  Version 1.0
+//  Version 1.1
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -32,6 +32,7 @@
 
 #import "StringCoding.h"
 #import <objc/message.h>
+#import <objc/runtime.h>
 
 
 NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
@@ -39,14 +40,62 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
 
 @interface NSString (StringCoding_Private)
 
-- (id)valueForType:(NSString *)type;
+- (id)SC_valueForTypeName:(NSString *)type;
 
 @end
 
 
 @implementation NSObject (StringCoding)
 
-- (NSString *)SC_propertyTypeForKey:(NSString *)key
+#if SC_SWIZZLE_ENABLED
+
+static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
+{
+    Method a = class_getInstanceMethod(c, original);
+    Method b = class_getInstanceMethod(c, replacement);
+    if (class_addMethod(c, original, method_getImplementation(b), method_getTypeEncoding(b)))
+    {
+        class_replaceMethod(c, replacement, method_getImplementation(a), method_getTypeEncoding(a));
+    }
+    else
+    {
+        method_exchangeImplementations(a, b);
+    }
+}
+
++ (void)load
+{
+    SC_swizzleInstanceMethod(self, @selector(setValue:forKey:), @selector(SC_setValue:forKey:));
+    SC_swizzleInstanceMethod(self, @selector(setValue:forKeyPath:), @selector(SC_setValue:forKeyPath:));
+}
+
+- (void)SC_setValue:(id)value forKey:(NSString *)key
+{
+    if (![value isKindOfClass:[NSString class]] || [[self SC_typeNameForKey:key] isEqualToString:@"NSString"])
+    {
+        [self SC_setValue:value forKey:key];
+    }
+    else
+    {
+        [self setStringValue:value forKey:key];
+    }
+}
+
+- (void)SC_setValue:(id)value forKeyPath:(NSString *)keyPath
+{
+    if (![value isKindOfClass:[NSString class]])
+    {
+        [self SC_setValue:value forKeyPath:keyPath];
+    }
+    else
+    {
+        [self setStringValue:value forKeyPath:keyPath];
+    }
+}
+
+#endif
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
 {
     //create cache
     static NSMutableDictionary *cacheByClass = nil;
@@ -55,15 +104,53 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
         cacheByClass = [[NSMutableDictionary alloc] init];
     }
     NSString *className = NSStringFromClass([self class]);
-    NSCache *cache = cacheByClass[className];
+    NSMutableDictionary *cache = cacheByClass[className];
     if (cache == nil)
     {
-        cache = [[NSCache alloc] init];
+        //create cache
+        cache = [[NSMutableDictionary alloc] init];
         cacheByClass[className] = cache;
+        
+        //prepopulate with property types
+        Class class = [self class];
+        while (true)
+        {
+            unsigned int count;
+            objc_property_t *properties = class_copyPropertyList(class, &count);
+            for (int i = 0; i < count; i++)
+            {
+                objc_property_t property = properties[i];
+                const char *name = property_getName(property);
+                
+                //get class
+                NSString *class = nil;
+                char *typeEncoding = property_copyAttributeValue(property, "T");
+                if (strlen(typeEncoding) >= 3 && typeEncoding[0] == '@')
+                {
+                    char *className = strndup(typeEncoding + 2, strlen(typeEncoding) - 3);
+                    class = [NSString stringWithUTF8String:className];
+                    NSRange range = [class rangeOfString:@"<"];
+                    if (range.location != NSNotFound)
+                    {
+                        class = [class substringToIndex:range.location];
+                    }
+                    class = NSStringFromClass(NSClassFromString(class));
+                    free(className);
+                }
+                free(typeEncoding);
+                
+                //cache the type for future reference
+                if (class) [cache setObject:class forKey:@(name)];
+            }
+            free(properties);
+            
+            if (class == [NSObject class]) break;
+            class = [class superclass];
+        }
     }
     
     //check cache
-    NSString *type = [cache objectForKey:key];
+    NSString *type = cache[key];
     if (type) return [type length]? type: nil;
     
     //get selector for setter method
@@ -74,84 +161,103 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     BOOL isPointer = NO;
     if ([self respondsToSelector:setter])
     {
-        Class class = [self class];
-        while (class != [NSObject class])
+        //get the first method argument
+        Method method = class_getInstanceMethod([self class], setter);
+        char *typeName = method_copyArgumentType(method, 2);
+
+        if (typeName[0] == '^')
         {
-            //get the first method argument
-            Method method = class_getInstanceMethod([self class], setter);
-            char *arg = method_copyArgumentType(method, 2);
-            NSString *typeName = @(arg);
-            free(arg);
-            
-            //handle pointers
-            if ([typeName hasPrefix:@"^"])
+            //handle pointer
+            isPointer = YES;
+            char *temp = typeName;
+            size_t chars = strlen(temp) - 1;
+            typeName = malloc(chars);
+            strncpy(typeName, &temp[1], chars);
+            free(temp);
+        }
+        
+        switch (typeName[0])
+        {
+            case '@':
             {
-                isPointer = YES;
-                typeName = [typeName substringFromIndex:1];
+                //object of unknown type
+                type = @"NSObject";
+                break;
             }
-            
-            if ([typeName isEqualToString:@"@"])
-            {
-                //object of unknown type, get value from property keys
-                unsigned int count;
-                objc_property_t *properties = class_copyPropertyList(class, &count);
-                for (int i = 0; i < count; i++)
-                {
-                    objc_property_t property = properties[i];
-                    const char *name = property_getName(property);
-                    if ([key isEqualToString:@(name)])
-                    {
-                        //get type
-                        const char *attributes = property_getAttributes(property);
-                        typeName = @(attributes);
-                        typeName = [typeName substringFromIndex:3];
-                        NSRange range = [typeName rangeOfString:@"\""];
-                        if (range.location != NSNotFound)
-                        {
-                            type = [typeName substringToIndex:range.location];
-                        }
-                        break;
-                    }
-                }
-                free(properties);
-            }
-            else if ([typeName hasPrefix:@"{"])
+            case '{':
             {
                 //struct
-                typeName = [typeName substringFromIndex:1];
-                NSRange range = [typeName rangeOfString:@"="];
+                type = [@(typeName) substringFromIndex:1];
+                NSRange range = [type rangeOfString:@"="];
                 if (range.location != NSNotFound)
                 {
-                    type = [typeName substringToIndex:range.location];
+                    type = [type substringToIndex:range.location];
                 }
+                break;
             }
-            else
+            case 'c':
+            case 'C':
             {
-                static NSDictionary *typeMap = nil;
-                if (typeMap == nil)
-                {
-                    typeMap = @{@"c": @"char",
-                                @"i": @"int",
-                                @"s": @"short",
-                                @"l": @"long",
-                                @"f": @"float"};
-                }
-                type = typeMap[typeName];
+                type = @"char";
+                break;
             }
-            
-            if (type)
+            case 'i':
+            case 'I':
+            case 's':
+            case 'S':
+            case 'l':
+            case 'L':
+            {
+                type = @"int";
+                break;
+            }
+            case 'q':
+            case 'Q':
+            {
+                type = @"longLong";
+                break;
+            }
+            case 'f':
+            {
+                type = @"float";
+                break;
+            }
+            case 'd':
+            {
+                type = @"double";
+                break;
+            }
+            case 'B':
+            {
+                type = @"bool";
+                break;
+            }
+            case '*':
+            {
+                type = @"UTFString";
+                break;
+            }
+            case '#':
+            {
+                type = @"class";
+                break;
+            }
+            case ':':
+            {
+                type = @"selector";
+                break;
+            }
+            default:
             {
                 break;
             }
-            else
-            {
-                //try superclass instead
-                class = [class superclass];
-            }
         }
+        
+        //free name
+        free(typeName);
     }
     
-    if (!type)
+    if (!type || [type isEqualToString:@"NSObject"])
     {
         //failed to get type any other way, so try getting existing value
         if ([self respondsToSelector:NSSelectorFromString(key)])
@@ -175,7 +281,7 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return type;
 }
 
-- (void)setStringValue:(NSString *)stringValue forKey:(NSString *)key
+- (void)setStringValue:(NSString *)value forKey:(NSString *)key
 {
     if ([key length])
     {
@@ -186,14 +292,14 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
         if ([self respondsToSelector:stringSetter])
         {
             //call the setStringValue setter
-            objc_msgSend(self, stringSetter, stringValue);
+            objc_msgSend(self, stringSetter, value);
         }
         else
         {
-            NSString *type = [self SC_propertyTypeForKey:key];
+            NSString *type = [self SC_typeNameForKey:key];
             if (type)
             {
-                [self setValue:[stringValue valueForType:type] forKey:key];
+                [self setValue:[value SC_valueForTypeName:type] forKey:key];
             }
             else
             {
@@ -481,6 +587,39 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return nil;
 }
 
+- (NSInteger)SC_enumValueInDictionary:(NSDictionary *)enumValuesByKey prefix:(NSString *)prefix
+{
+    NSString *value = [self lowercaseString];
+    if ([value hasPrefix:prefix])
+    {
+        value = [value substringFromIndex:[prefix length]];
+    }
+    return [enumValuesByKey[value] integerValue];
+}
+
+- (NSUInteger)SC_bitmaskValueInDictionary:(NSDictionary *)maskValuesByKey prefix:(NSString *)prefix
+{
+    NSString *value = [self lowercaseString];
+    NSArray *components = [maskValuesByKey allKeys];
+    if (![value isEqualToString:@"all"])
+    {
+        components = [value componentsSeparatedByString:@" "];
+    }
+    NSUInteger values = 0;
+    for (NSString *value in components)
+    {
+        if ([value hasPrefix:prefix])
+        {
+            values |= [maskValuesByKey[[value substringFromIndex:[prefix length]]] intValue];
+        }
+        else
+        {
+            values |= [maskValuesByKey[value] integerValue];
+        }
+    }
+    return values;
+}
+
 - (BOOL)isNumeric
 {
     static NSNumberFormatter *formatter = nil;
@@ -492,9 +631,9 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return [formatter numberFromString:self] != nil;
 }
 
-- (id)valueForType:(NSString *)type
+- (id)SC_valueForTypeName:(NSString *)type
 {
-    if ([self isKindOfClass:NSClassFromString(type)])
+    if ([type isEqualToString:@"NSString"])
     {
         //return self
         return self;
@@ -596,6 +735,11 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return nil;
 }
 
+- (NSString *)stringValue
+{
+    return self;
+}
+
 - (char)charValue
 {
     if ([self length] == 0)
@@ -629,9 +773,44 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     }
 }
 
+- (short)shortValue
+{
+    return [self intValue];
+}
+
+- (long)longValue
+{
+    return [self intValue];
+}
+
+- (unsigned char)unsignedCharValue
+{
+    return [self charValue];
+}
+
+- (unsigned int)unsignedIntValue
+{
+    return [self intValue];
+}
+
+- (unsigned long)unsignedLongValue
+{
+    return [self intValue];
+}
+
+- (unsigned long long)unsignedLongLongValue
+{
+    return [self longLongValue];
+}
+
 - (Class)classValue
 {
     return NSClassFromString(self);
+}
+
+- (SEL)selectorValue
+{
+    return NSSelectorFromString(self);
 }
 
 - (NSURL *)NSURLValue
@@ -649,10 +828,46 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return nil;
 }
 
+- (const char *)UTF8StringValue
+{
+    //special case
+    return [self UTF8String];
+}
+
 - (CGFontRef)CGFontValue
 {
     CFStringRef nameRef = (__bridge CFStringRef)[self SC_fontValue].fontName;
     return (__bridge CGFontRef)CFBridgingRelease(CGFontCreateWithFontName(nameRef));
+}
+
+- (NSLineBreakMode)NSLineBreakModeValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"wordwrapping": @(NSLineBreakByWordWrapping),
+                       @"charwrapping": @(NSLineBreakByCharWrapping),
+                       @"clipping": @(NSLineBreakByClipping),
+                       @"truncatinghead": @(NSLineBreakByTruncatingHead),
+                       @"truncatingtail": @(NSLineBreakByTruncatingTail),
+                       @"truncatingmiddle": @(NSLineBreakByTruncatingMiddle),
+                       
+                       //added for convenience
+                       @"wordwrapped": @(NSLineBreakByWordWrapping),
+                       @"wordwrap": @(NSLineBreakByWordWrapping),
+                       @"wrapped": @(NSLineBreakByWordWrapping),
+                       @"wrap": @(NSLineBreakByWordWrapping),
+                       @"charwrapped": @(NSLineBreakByCharWrapping),
+                       @"charwrap": @(NSLineBreakByCharWrapping),
+                       @"clipped": @(NSLineBreakByClipping),
+                       @"clip": @(NSLineBreakByClipping),
+                       @"truncatehead": @(NSLineBreakByTruncatingHead),
+                       @"truncatetail": @(NSLineBreakByTruncatingTail),
+                       @"truncated": @(NSLineBreakByTruncatingTail),
+                       @"truncate": @(NSLineBreakByTruncatingTail),
+                       @"truncatemiddle": @(NSLineBreakByTruncatingMiddle)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"nslinebreakby"];
 }
 
 #ifdef __IPHONE_OS_VERSION_MAX_ALLOWED
@@ -763,6 +978,25 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
     return UIEdgeInsetsFromString(self);
 }
 
+- (UIOffset)UIOffsetValue
+{
+    NSArray *parts = [self componentsSeparatedByString:@" "];
+    switch ([parts count])
+    {
+        case 2:
+        {
+            return UIOffsetMake([parts[0] floatValue], // horizontal
+                                [parts[1] floatValue]); // vertical
+        }
+        case 1:
+        {
+            return UIOffsetMake([parts[0] floatValue], // horizontal
+                                [parts[0] floatValue]); // vertical
+        }
+    }
+    return UIOffsetFromString(self);
+}
+
 - (UIViewContentMode)UIViewContentModeValue
 {
     static NSDictionary *enumValues = nil;
@@ -780,15 +1014,16 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
                        @"topleft": @(UIViewContentModeTopLeft),
                        @"topright": @(UIViewContentModeTopRight),
                        @"bottomleft": @(UIViewContentModeBottomLeft),
-                       @"bottomright": @(UIViewContentModeBottomRight)};
+                       @"bottomright": @(UIViewContentModeBottomRight),
+                       
+                       //added for convenience
+                       @"scale": @(UIViewContentModeScaleToFill),
+                       @"aspectfit": @(UIViewContentModeScaleAspectFit),
+                       @"fit": @(UIViewContentModeScaleAspectFit),
+                       @"aspectfill": @(UIViewContentModeScaleAspectFill),
+                       @"fill": @(UIViewContentModeScaleAspectFill)};
     }
-    static NSString *prefix = @"uiviewcontentmode";
-    NSString *value = [self lowercaseString];
-    if ([value hasPrefix:prefix])
-    {
-        value = [value substringFromIndex:[prefix length]];
-    }
-    return [enumValues[value] intValue];
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uiviewcontentmode"];
 }
 
 - (NSTextAlignment)NSTextAlignmentValue
@@ -802,13 +1037,413 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
                        @"justified": @(NSTextAlignmentJustified),
                        @"natural": @(NSTextAlignmentNatural)};
     }
-    static NSString *prefix = @"nstextalignment";
-    NSString *value = [self lowercaseString];
-    if ([value hasPrefix:prefix])
+    return [self SC_enumValueInDictionary:enumValues prefix:@"nstextalignment"];
+}
+
+- (UIViewAutoresizing)UIViewAutoresizingValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
     {
-        value = [value substringFromIndex:[prefix length]];
+        enumValues = @{@"none": @(UIViewAutoresizingNone),
+                       @"flexibleleftmargin": @(UIViewAutoresizingFlexibleLeftMargin),
+                       @"flexiblewidth": @(UIViewAutoresizingFlexibleWidth),
+                       @"flexiblerightmargin": @(UIViewAutoresizingFlexibleRightMargin),
+                       @"flexibletopmargin": @(UIViewAutoresizingFlexibleTopMargin),
+                       @"flexibleheight": @(UIViewAutoresizingFlexibleHeight),
+                       @"flexiblebottommargin": @(UIViewAutoresizingFlexibleBottomMargin),
+                       
+                       //added for convenience
+                       @"leftmargin": @(UIViewAutoresizingFlexibleLeftMargin),
+                       @"left": @(UIViewAutoresizingFlexibleLeftMargin),
+                       @"width": @(UIViewAutoresizingFlexibleWidth),
+                       @"rightmargin": @(UIViewAutoresizingFlexibleRightMargin),
+                       @"right": @(UIViewAutoresizingFlexibleRightMargin),
+                       @"topmargin": @(UIViewAutoresizingFlexibleTopMargin),
+                       @"top": @(UIViewAutoresizingFlexibleTopMargin),
+                       @"height": @(UIViewAutoresizingFlexibleHeight),
+                       @"bottommargin": @(UIViewAutoresizingFlexibleBottomMargin),
+                       @"bottom": @(UIViewAutoresizingFlexibleBottomMargin)};
     }
-    return [enumValues[value] intValue];
+    return [self SC_bitmaskValueInDictionary:enumValues prefix:@"uiviewautoresizing"];
+}
+
+- (UIBaselineAdjustment)UIBaselineAdjustment
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"alignbaselines": @(UIBaselineAdjustmentAlignBaselines),
+                       @"aligncenters": @(UIBaselineAdjustmentAlignCenters),
+                       @"none": @(UIBaselineAdjustmentNone),
+                       
+                       //added for convenience
+                       @"baselines": @(UIBaselineAdjustmentAlignBaselines),
+                       @"baseline": @(UIBaselineAdjustmentAlignBaselines),
+                       @"centers": @(UIBaselineAdjustmentAlignCenters),
+                       @"center": @(UIBaselineAdjustmentAlignCenters),
+                       @"centered": @(UIBaselineAdjustmentAlignCenters)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibaselineadjustment"];
+}
+
+- (NSDictionary *)SC_controlStates
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"normal": @(UIControlStateNormal),
+                       @"highlighted": @(UIControlStateHighlighted),
+                       @"disabled": @(UIControlStateDisabled),
+                       @"selected": @(UIControlStateSelected)};
+    }
+    return enumValues;
+}
+
+- (UIControlState)UIControlStateValue
+{
+    return [self SC_bitmaskValueInDictionary:[self SC_controlStates] prefix:@"uicontrolstate"];
+}
+
+- (UIControlEvents)UIControlEventsValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"touchdown": @(UIControlEventTouchDown),
+                       @"touchdownrepeat": @(UIControlEventTouchDownRepeat),
+                       @"touchdraginside": @(UIControlEventTouchDragInside),
+                       @"touchdragoutside": @(UIControlEventTouchDragOutside),
+                       @"touchdragenter": @(UIControlEventTouchDragEnter),
+                       @"touchdragexit": @(UIControlEventTouchDragExit),
+                       @"touchupinside": @(UIControlEventTouchUpInside),
+                       @"touchupoutside": @(UIControlEventTouchUpOutside),
+                       @"touchcancel": @(UIControlEventTouchCancel),
+                       @"valuechanged": @(UIControlEventValueChanged),
+                       @"editingdidbegin": @(UIControlEventEditingDidBegin),
+                       @"editingchanged": @(UIControlEventEditingChanged),
+                       @"editingdidend": @(UIControlEventEditingDidEnd),
+                       @"editingdidendonexit": @(UIControlEventEditingDidEndOnExit),
+                       @"allTouchevents": @(UIControlEventAllTouchEvents),
+                       @"alleditingevents": @(UIControlEventAllEditingEvents),
+                       @"allevents": @(UIControlEventAllEvents)};
+    }
+    return [self SC_bitmaskValueInDictionary:enumValues prefix:@"uicontrolevent"];
+}
+
+- (UITextBorderStyle)UITextBorderStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITextBorderStyleNone),
+                       @"line": @(UITextBorderStyleLine),
+                       @"bezel": @(UITextBorderStyleBezel),
+                       @"roundedrect": @(UITextBorderStyleRoundedRect)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitextborderstyle"];
+}
+
+- (UITextFieldViewMode)UITextFieldViewModeValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"never": @(UITextFieldViewModeNever),
+                       @"whileediting": @(UITextFieldViewModeWhileEditing),
+                       @"unlessediting": @(UITextFieldViewModeUnlessEditing),
+                       @"always": @(UITextFieldViewModeAlways)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitextfieldviewmode"];
+}
+
+- (UIDataDetectorTypes)UIDataDetectorTypesValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"phonenumber": @(UIDataDetectorTypePhoneNumber),
+                       @"link": @(UIDataDetectorTypeLink),
+                       @"address": @(UIDataDetectorTypeAddress),
+                       @"calendarevent": @(UIDataDetectorTypeCalendarEvent),
+                       @"none": @(UIDataDetectorTypeNone),
+                       @"all": @(UIDataDetectorTypeNone),
+                       
+                       //added for convenience
+                       @"phone": @(UIDataDetectorTypePhoneNumber),
+                       @"calendar": @(UIDataDetectorTypeCalendarEvent)};
+    }
+    return [self SC_bitmaskValueInDictionary:enumValues prefix:@"uidatadetectortype"];
+}
+
+- (UIScrollViewIndicatorStyle)UIScrollViewIndicatorStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"default": @(UIScrollViewIndicatorStyleDefault),
+                       @"black": @(UIScrollViewIndicatorStyleBlack),
+                       @"white": @(UIScrollViewIndicatorStyleWhite)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uiscrollviewindicatorstyle"];
+}
+
+- (UITableViewStyle)UITableViewStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"plain": @(UITableViewStylePlain),
+                       @"grouped": @(UITableViewStyleGrouped)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewstyle"];
+}
+
+- (UITableViewScrollPosition)UITableViewScrollPositionValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITableViewScrollPositionNone),
+                       @"top": @(UITableViewScrollPositionTop),
+                       @"middle": @(UITableViewScrollPositionMiddle),
+                       @"bottom": @(UITableViewScrollPositionBottom)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewscrollposition"];
+}
+
+- (UITableViewRowAnimation)UITableViewRowAnimationValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"fade": @(UITableViewRowAnimationFade),
+                       @"right": @(UITableViewRowAnimationRight),
+                       @"left": @(UITableViewRowAnimationLeft),
+                       @"top": @(UITableViewRowAnimationTop),
+                       @"bottom": @(UITableViewRowAnimationBottom),
+                       @"none": @(UITableViewRowAnimationNone),
+                       @"middle": @(UITableViewRowAnimationMiddle),
+                       @"automatic": @(UITableViewRowAnimationAutomatic)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewrowanimation"];
+}
+
+- (UITableViewCellStyle)UITableViewCellStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"default": @(UITableViewCellStyleDefault),
+                       @"value1": @(UITableViewCellStyleValue1),
+                       @"value2": @(UITableViewCellStyleValue2),
+                       @"subtitle": @(UITableViewCellStyleSubtitle),
+                       
+                       //added for convenience
+                       @"1": @(UITableViewCellStyleValue1),
+                       @"type1": @(UITableViewCellStyleValue1),
+                       @"style1": @(UITableViewCellStyleValue1),
+                       @"2": @(UITableViewCellStyleValue2),
+                       @"type2": @(UITableViewCellStyleValue2),
+                       @"style2": @(UITableViewCellStyleValue2)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewcellstyle"];
+}
+
+- (UITableViewCellSeparatorStyle)UITableViewCellSeparatorStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITableViewCellSeparatorStyleNone),
+                       @"singleline": @(UITableViewCellSeparatorStyleSingleLine),
+                       @"singlelineetched": @(UITableViewCellSeparatorStyleSingleLineEtched),
+                       
+                       //added for convenience
+                       @"line": @(UITableViewCellSeparatorStyleSingleLine),
+                       @"lineetched": @(UITableViewCellSeparatorStyleSingleLineEtched),
+                       @"etchedline": @(UITableViewCellSeparatorStyleSingleLineEtched),
+                       @"etched": @(UITableViewCellSeparatorStyleSingleLineEtched)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewcellseparatorstyle"];
+}
+
+- (UITableViewCellSelectionStyle)UITableViewCellSelectionStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITableViewCellSelectionStyleNone),
+                       @"blue": @(UITableViewCellSelectionStyleBlue),
+                       @"gray": @(UITableViewCellSelectionStyleGray)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewcellselectionstyle"];
+}
+
+- (UITableViewCellEditingStyle)UITableViewCellEditingStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITableViewCellEditingStyleNone),
+                       @"delete": @(UITableViewCellEditingStyleDelete),
+                       @"insert": @(UITableViewCellEditingStyleInsert)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewcelleditingstyle"];
+}
+
+- (UITableViewCellAccessoryType)UITableViewCellAccessoryTypeValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"none": @(UITableViewCellAccessoryNone),
+                       @"disclosureindicator": @(UITableViewCellAccessoryDisclosureIndicator),
+                       @"disclosurebutton": @(UITableViewCellAccessoryDetailDisclosureButton),
+                       @"checkmark": @(UITableViewCellAccessoryCheckmark),
+                       
+                       //added for convenience
+                       @"disclosurearrow": @(UITableViewCellAccessoryDisclosureIndicator),
+                       @"chevron": @(UITableViewCellAccessoryDisclosureIndicator),
+                       @"button": @(UITableViewCellAccessoryDetailDisclosureButton),
+                       @"tick": @(UITableViewCellAccessoryCheckmark)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitableviewcellaccessory"];
+}
+
+- (UITableViewCellStateMask)UITableViewCellStateMaskValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"default": @(UITableViewCellStateDefaultMask),
+                       @"showingeditcontrolmask": @(UITableViewCellStateShowingEditControlMask),
+                       @"showingdeleteconfirmationmask": @(UITableViewCellStateShowingDeleteConfirmationMask),
+                       
+                       //added for convenience
+                       @"editcontrolmask": @(UITableViewCellStateShowingEditControlMask),
+                       @"editcontrol": @(UITableViewCellStateShowingEditControlMask),
+                       @"edit": @(UITableViewCellStateShowingEditControlMask),
+                       @"deleteconfirmationmask": @(UITableViewCellStateShowingDeleteConfirmationMask),
+                       @"deleteconfirmation": @(UITableViewCellStateShowingDeleteConfirmationMask),
+                       @"delete": @(UITableViewCellStateShowingDeleteConfirmationMask)};
+    }
+    return [self SC_bitmaskValueInDictionary:enumValues prefix:@"uitableviewcellstate"];
+}
+
+- (UIButtonType)UIButtonTypeValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"custom": @(UIButtonTypeCustom),
+                       @"roundedrect": @(UIButtonTypeRoundedRect),
+                       @"detaildisclosure": @(UIButtonTypeDetailDisclosure),
+                       @"infolight": @(UIButtonTypeInfoLight),
+                       @"infodark": @(UIButtonTypeInfoDark),
+                       @"contactadd": @(UIButtonTypeContactAdd),
+                       
+                       //added for convenience
+                       @"default": @(UIButtonTypeRoundedRect),
+                       @"disclosure": @(UIButtonTypeDetailDisclosure),
+                       @"info": @(UIButtonTypeInfoLight),
+                       @"addcontact": @(UIButtonTypeContactAdd)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibuttontype"];
+}
+
+- (UIBarStyle)UIBarStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"default": @(UIBarStyleDefault),
+                       @"black": @(UIBarStyleBlack),
+                       
+                       //deprecated
+                       @"blackopaque": @(UIBarStyleBlackOpaque),
+                       @"blacktranslucent": @(UIBarStyleBlackTranslucent)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibarstyle"];
+}
+
+- (UIBarMetrics)UIBarMetricsValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"default": @(UIBarMetricsDefault),
+                       @"landscapephone": @(UIBarMetricsLandscapePhone),
+                       
+                       //added for convenience
+                       @"landscape": @(UIBarMetricsLandscapePhone)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibarmetrics"];
+}
+
+- (UIBarButtonItemStyle)UIBarButtonItemStyleValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"plain": @(UIBarButtonItemStylePlain),
+                       @"bordered": @(UIBarButtonItemStyleBordered),
+                       @"done": @(UIBarButtonItemStyleDone)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibarbuttonitemstyle"];
+}
+
+- (UIBarButtonSystemItem)UIBarButtonSystemItemValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"done": @(UIBarButtonSystemItemDone),
+                       @"cancel": @(UIBarButtonSystemItemCancel),
+                       @"edit": @(UIBarButtonSystemItemEdit),
+                       @"save": @(UIBarButtonSystemItemSave),
+                       @"add": @(UIBarButtonSystemItemAdd),
+                       @"flexiblespace": @(UIBarButtonSystemItemFlexibleSpace),
+                       @"fixedspace": @(UIBarButtonSystemItemFixedSpace),
+                       @"compose": @(UIBarButtonSystemItemCompose),
+                       @"action": @(UIBarButtonSystemItemAction),
+                       @"organize": @(UIBarButtonSystemItemOrganize),
+                       @"bookmarks": @(UIBarButtonSystemItemBookmarks),
+                       @"search": @(UIBarButtonSystemItemSearch),
+                       @"refresh": @(UIBarButtonSystemItemRefresh),
+                       @"stop": @(UIBarButtonSystemItemStop),
+                       @"camera": @(UIBarButtonSystemItemCamera),
+                       @"trash": @(UIBarButtonSystemItemTrash),
+                       @"play": @(UIBarButtonSystemItemPlay),
+                       @"pause": @(UIBarButtonSystemItemPause),
+                       @"rewind": @(UIBarButtonSystemItemRewind),
+                       @"fastforward": @(UIBarButtonSystemItemFastForward),
+                       @"undo": @(UIBarButtonSystemItemUndo),
+                       @"redo": @(UIBarButtonSystemItemRedo),
+                       @"pagecurl": @(UIBarButtonSystemItemPageCurl)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uibarbuttonsystemitem"];
+}
+
+- (UITabBarSystemItem)UITabBarSystemItemValue
+{
+    static NSDictionary *enumValues = nil;
+    if (enumValues == nil)
+    {
+        enumValues = @{@"more": @(UITabBarSystemItemMore),
+                       @"favorites": @(UITabBarSystemItemFavorites),
+                       @"featured": @(UITabBarSystemItemFeatured),
+                       @"toprated": @(UITabBarSystemItemTopRated),
+                       @"recents": @(UITabBarSystemItemRecents),
+                       @"contacts": @(UITabBarSystemItemContacts),
+                       @"history": @(UITabBarSystemItemHistory),
+                       @"bookmarks": @(UITabBarSystemItemBookmarks),
+                       @"search": @(UITabBarSystemItemSearch),
+                       @"downloads": @(UITabBarSystemItemDownloads),
+                       @"mostrecent": @(UITabBarSystemItemMostRecent),
+                       @"mostviewed": @(UITabBarSystemItemMostViewed)};
+    }
+    return [self SC_enumValueInDictionary:enumValues prefix:@"uitabbarsystemitem"];
 }
 
 #else
@@ -914,8 +1549,7 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
                        @"nsjustifiedtextalignment": @(NSJustifiedTextAlignment),
                        @"nsnaturaltextalignment": @(NSNaturalTextAlignment)};
     }
-    NSString *value = [self lowercaseString];
-    return [enumValues[value] intValue];
+    return [self SC_enumValueInDictionary:enumValues prefix:nil];
 }
 
 #endif
@@ -935,23 +1569,304 @@ NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
 
 @implementation UIView (StringValues)
 
-- (void)setBackgroundColorWithString:(NSString *)string
+- (NSString *)SC_typeNameForKey:(NSString *)key
 {
-    self.backgroundColor = [string UIColorValue];
-}
-
-- (void)setContentModeWithString:(NSString *)string
-{
-    self.contentMode = [string UIViewContentModeValue];
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"backgroundColor": @"UIColor",
+                  @"contentMode": @"UIViewContentMode",
+                  @"autoresizingMask": @"UIViewAutoresizing",
+                  @"restorationIdentifier": @"NSString"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
 }
 
 @end
 
 @implementation UILabel (StringValues)
 
-- (void)setTextAlignmentWithString:(NSString *)string
+- (NSString *)SC_typeNameForKey:(NSString *)key
 {
-    self.textAlignment = [string NSTextAlignmentValue];
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"textAlignment": @"NSTextAlignment",
+                  @"lineBreakMode": @"NSLineBreakMode",
+                  @"baselineAdjustment": @"UIBaselineAdjustment"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UITextView (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"textAlignment": @"NSTextAlignment",
+                  @"dataDetectorTypes": @"UITextBorderStyle"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UIScrollView (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"contentInset": @"UIEdgeInsets",
+                  @"scrollIndicatorInsets": @"UIEdgeInsets",
+                  @"scrollIndicatorStyle": @"UIScrollViewIndicatorStyle"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UITableView (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"style": @"UITableViewStyle",
+                  @"separatorStyle": @"UITableViewCellSeparatorStyle"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UITableViewCell (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"style": @"UITableViewCellStyle",
+                  @"selectionStyle": @"UITableViewCellSelectionStyle",
+                  @"editingStyle": @"UITableViewCellEditingStyle",
+                  @"accessoryType": @"UITableViewCellAccessoryType",
+                  @"editingAccessoryType": @"UITableViewCellAccessoryType"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UIControl (StringCoding)
+
+- (void)setStringValue:(NSString *)value forKey:(NSString *)key
+{
+    //handle target/action
+    UIControlEvents event = [key UIControlEventsValue];
+    if (event)
+    {
+        NSArray *components = [value componentsSeparatedByString:@" "];
+        if ([components count])
+        {
+            SEL selector = [[components lastObject] selectorValue];
+            
+            //find first object in responder chain that responds to selector
+            id responder = self;
+            while ((responder = [responder nextResponder]))
+            {
+                if ([responder respondsToSelector:selector])
+                {
+                    [self addTarget:responder action:selector forControlEvents:event];
+                    break;
+                }
+            }
+        }
+        return;
+    }
+    
+    //handle setValue:forState:
+    if ([key length] > 1)
+    {
+        NSString *name = key;
+        UIControlState state = UIControlStateNormal;
+        for (NSString *prefix in [key SC_controlStates])
+        {
+            if ([name hasPrefix:prefix])
+            {
+                state = [[key SC_controlStates][prefix] integerValue];
+                name = [name substringFromIndex:[prefix length]];
+                break;
+            }
+        }
+        name = [[[name substringToIndex:1] uppercaseString] stringByAppendingString:[name substringFromIndex:1]];
+        SEL selector = NSSelectorFromString([NSString stringWithFormat:@"set%@:forState:", name]);
+        if ([self respondsToSelector:selector])
+        {
+            NSString *type = [self SC_typeNameForKey:[NSString stringWithFormat:@"current%@", name]];
+            if (type) objc_msgSend(self, selector, [value SC_valueForTypeName:type], state);
+            return;
+        }
+    }
+    
+    //default implementation
+    [super setStringValue:value forKey:key];
+}
+
+@end
+
+@implementation UIButton (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"buttonType": @"UIButtonType",
+                  @"contentEdgeInsets": @"UIEdgeInsets",
+                  @"titleEdgeInsets": @"UIEdgeInsets",
+                  @"imageEdgeInsets": @"UIEdgeInsets"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UITextField (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"textAlignment": @"NSTextAlignment",
+                  @"borderStyle": @"UITextBorderStyle",
+                  @"clearButtonMode": @"UITextFieldViewMode",
+                  @"leftViewMode": @"UITextFieldViewMode",
+                  @"rightViewMode": @"UITextFieldViewMode",};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+@end
+
+@implementation UIToolbar (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"barStyle": @"UIBarStyle"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+//TODO: work out system for setting property for state, style AND metrics
+
+@end
+
+@implementation UINavigationBar (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"barStyle": @"UIBarStyle"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+//TODO: work out system for setting property for state, style AND metrics
+
+@end
+
+@implementation UIBarItem (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"imageInsets": @"UIEdgeInsets",
+                  @"landscapeImagePhoneInsets": @"UIEdgeInsets"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+- (void)setTitleTextAttributes:(NSDictionary *)attributes
+{
+    [self setTitleTextAttributes:attributes forState:UIControlStateNormal];
+}
+
+- (void)setNormalTitleTextAttributes:(NSDictionary *)attributes
+{
+    [self setTitleTextAttributes:attributes forState:UIControlStateNormal];
+}
+
+- (void)setHighlightedTitleTextAttributes:(NSDictionary *)attributes
+{
+    [self setTitleTextAttributes:attributes forState:UIControlStateHighlighted];
+}
+
+- (void)setSelectedTitleTextAttributes:(NSDictionary *)attributes
+{
+    [self setTitleTextAttributes:attributes forState:UIControlStateSelected];
+}
+
+- (void)setDisabledTitleTextAttributes:(NSDictionary *)attributes
+{
+    [self setTitleTextAttributes:attributes forState:UIControlStateDisabled];
+}
+
+@end
+
+@implementation UIBarButtonItem (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"style": @"UIBarButtonItemStyle",
+                  @"landscapeImagePhoneInsets": @"UIEdgeInsets"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+//TODO: work out system for setting property for state, style AND metrics
+
+@end
+
+@implementation UITabBarItem (StringValues)
+
+- (NSString *)SC_typeNameForKey:(NSString *)key
+{
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"titlePositionAdjustment": @"UIOffset"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+- (void)setFinishedSelectedImageWithString:(NSString *)string
+{
+    [self setFinishedSelectedImage:[string UIImageValue]
+       withFinishedUnselectedImage:[self finishedUnselectedImage]];
+}
+
+- (void)setFinishedUnselectedImageWithString:(NSString *)string
+{
+    [self setFinishedSelectedImage:[self finishedSelectedImage]
+       withFinishedUnselectedImage:[string UIImageValue]];
 }
 
 @end

@@ -1,0 +1,26 @@
+{
+    "button.title": "Foo",
+    "button.highlightedTitle": "Bar",
+    "button.titleColor": "white",
+    "button.titleShadowColor": "black",
+    "button.titleShadowOffset": "0 2",
+    "button.backgroundColor": "#FF0000",
+    
+    "button.layer.cornerRadius": "10",
+    "button.layer.borderColor": "black",
+    "button.layer.borderWidth": "3",
+    "button.layer.shadowOffset": "0 5",
+    "button.layer.shadowOpacity": "0.75",
+    "button.layer.shadowRadius": "5",
+    
+    "button.touchUpInside": "showAlertWithSender:event:",
+    
+    "imageView.image": "Snowman.png",
+    "imageView.contentMode": "aspectFit",
+    
+    "label.text": "This label's text and appearance was set using StringCoding",
+    "label.numberOfLines": "0",
+    "label.lineBreakMode": "wordwrap",
+    "label.textAlignment": "center",
+    "label.font": "courier 11"
+}

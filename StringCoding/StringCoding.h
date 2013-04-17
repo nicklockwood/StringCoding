@@ -1,7 +1,7 @@
 //
 //  StringCoding.h
 //
-//  Version 1.0
+//  Version 1.1
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -34,6 +34,11 @@
 #import <QuartzCore/QuartzCore.h>
 
 
+#ifndef SC_SWIZZLE_ENABLED
+#define SC_SWIZZLE_ENABLED 1
+#endif
+
+
 extern NSString *const StringCodingErrorDomain;
 
 
@@ -54,6 +59,7 @@ extern NSString *const StringCodingErrorDomain;
 - (BOOL)isNumeric;
 
 - (Class)classValue;
+- (SEL)selectorValue;
 - (char)charValue;
 - (NSURL *)NSURLValue;
 
@@ -66,14 +72,46 @@ extern NSString *const StringCodingErrorDomain;
 - (CGFontRef)CGFontValue;
 
 - (NSTextAlignment)NSTextAlignmentValue;
+- (NSLineBreakMode)NSLineBreakModeValue;
 
 #ifdef __IPHONE_OS_VERSION_MAX_ALLOWED
 
 - (UIColor *)UIColorValue;
 - (UIImage *)UIImageValue;
 - (UIFont *)UIFontValue;
+
 - (UIEdgeInsets)UIEdgeInsetsValue;
+- (UIOffset)UIOffsetValue;
 - (UIViewContentMode)UIViewContentModeValue;
+- (UIViewAutoresizing)UIViewAutoresizingValue;
+- (UIBaselineAdjustment)UIBaselineAdjustment;
+
+- (UIControlState)UIControlStateValue;
+- (UIControlEvents)UIControlEventsValue;
+
+- (UITextBorderStyle)UITextBorderStyleValue;
+- (UITextFieldViewMode)UITextFieldViewModeValue;
+- (UIDataDetectorTypes)UIDataDetectorTypesValue;
+
+- (UIScrollViewIndicatorStyle)UIScrollViewIndicatorStyleValue;
+
+- (UITableViewStyle)UITableViewStyleValue;
+- (UITableViewScrollPosition)UITableViewScrollPositionValue;
+- (UITableViewRowAnimation)UITableViewRowAnimationValue;
+- (UITableViewCellStyle)UITableViewCellStyleValue;
+- (UITableViewCellSeparatorStyle)UITableViewCellSeparatorStyleValue;
+- (UITableViewCellSelectionStyle)UITableViewCellSelectionStyleValue;
+- (UITableViewCellEditingStyle)UITableViewCellEditingStyleValue;
+- (UITableViewCellAccessoryType)UITableViewCellAccessoryTypeValue;
+- (UITableViewCellStateMask)UITableViewCellStateMaskValue;
+
+- (UIButtonType)UIButtonTypeValue;
+
+- (UIBarStyle)UIBarStyleValue;
+- (UIBarMetrics)UIBarMetricsValue;
+- (UIBarButtonItemStyle)UIBarButtonItemStyleValue;
+- (UIBarButtonSystemItem)UIBarButtonSystemItemValue;
+- (UITabBarSystemItem)UITabBarSystemItemValue;
 
 #else
 
@@ -87,5 +125,4 @@ extern NSString *const StringCodingErrorDomain;
 #endif
 
 @end
-
 
