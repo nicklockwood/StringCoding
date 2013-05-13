@@ -1,7 +1,7 @@
 //
 //  StringCoding.h
 //
-//  Version 1.1
+//  Version 1.2
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -44,8 +44,8 @@ extern NSString *const StringCodingErrorDomain;
 
 @interface NSObject (StringCoding)
 
-- (void)setStringValue:(NSString *)value forKey:(NSString *)key;
-- (void)setStringValue:(NSString *)value forKeyPath:(NSString *)keyPath;
+- (void)setValueWithString:(NSString *)value forKey:(NSString *)key;
+- (void)setValueWithString:(NSString *)value forKeyPath:(NSString *)keyPath;
 
 @end
 
@@ -62,6 +62,8 @@ extern NSString *const StringCodingErrorDomain;
 - (SEL)selectorValue;
 - (char)charValue;
 - (NSURL *)NSURLValue;
+- (NSURLRequest *)NSURLRequestValue;
+- (NSNumber *)NSNumberValue;
 
 - (CGPoint)CGPointValue;
 - (CGSize)CGSizeValue;

@@ -1,7 +1,7 @@
 //
 //  StringCoding.m
 //
-//  Version 1.1
+//  Version 1.2
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -33,6 +33,23 @@
 #import "StringCoding.h"
 #import <objc/message.h>
 #import <objc/runtime.h>
+
+
+#import <Availability.h>
+#if !__has_feature(objc_arc)
+#error This class requires automatic reference counting
+#endif
+
+
+#import <Availability.h>
+#undef SC_weak
+#if __has_feature(objc_arc_weak) && \
+(!(defined __MAC_OS_X_VERSION_MIN_REQUIRED) || \
+__MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_8)
+#define SC_weak weak
+#else
+#define SC_weak unsafe_unretained
+#endif
 
 
 NSString *const StringCodingErrorDomain = @"StringCodingErrorDomain";
@@ -77,7 +94,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     }
     else
     {
-        [self setStringValue:value forKey:key];
+        [self setValueWithString:value forKey:key];
     }
 }
 
@@ -89,7 +106,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     }
     else
     {
-        [self setStringValue:value forKeyPath:keyPath];
+        [self setValueWithString:value forKeyPath:keyPath];
     }
 }
 
@@ -132,6 +149,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                     NSRange range = [class rangeOfString:@"<"];
                     if (range.location != NSNotFound)
                     {
+                        //TODO: better handling of protocols
                         class = [class substringToIndex:range.location];
                     }
                     class = NSStringFromClass(NSClassFromString(class));
@@ -139,8 +157,8 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                 }
                 free(typeEncoding);
                 
-                //cache the type for future reference
-                if (class) [cache setObject:class forKey:@(name)];
+                //set type
+                if (class) cache[@(name)] = class;
             }
             free(properties);
             
@@ -164,15 +182,15 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         //get the first method argument
         Method method = class_getInstanceMethod([self class], setter);
         char *typeName = method_copyArgumentType(method, 2);
-
+        
         if (typeName[0] == '^')
         {
             //handle pointer
             isPointer = YES;
             char *temp = typeName;
             size_t chars = strlen(temp) - 1;
-            typeName = malloc(chars);
-            strncpy(typeName, &temp[1], chars);
+            typeName = malloc(chars + 1);
+            strlcpy(typeName, &temp[1], chars);
             free(temp);
         }
         
@@ -182,6 +200,15 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
             {
                 //object of unknown type
                 type = @"NSObject";
+                if ([self respondsToSelector:NSSelectorFromString(key)])
+                {
+                    //try deriving type from existing value
+                    id value = [self valueForKey:key];
+                    if (value)
+                    {
+                        type = NSStringFromClass([value class]);
+                    }
+                }
                 break;
             }
             case '{':
@@ -256,17 +283,13 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         //free name
         free(typeName);
     }
-    
-    if (!type || [type isEqualToString:@"NSObject"])
+    else if ([self respondsToSelector:NSSelectorFromString(key)])
     {
-        //failed to get type any other way, so try getting existing value
-        if ([self respondsToSelector:NSSelectorFromString(key)])
+        //try deriving type from existing value
+        id value = [self valueForKey:key];
+        if (value)
         {
-            id value = [self valueForKey:key];
-            if (value)
-            {
-                type = NSStringFromClass([value class]);
-            }
+            type = NSStringFromClass([value class]);
         }
     }
     
@@ -277,43 +300,63 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     }
     
     //cache and return type
-    [cache setObject:type ?: @"" forKey:key];
+    cache[key] = type ?: @"";
     return type;
 }
 
-- (void)setStringValue:(NSString *)value forKey:(NSString *)key
+- (BOOL)SC_callSetter:(NSString *)setterString withValue:(NSString *)value
 {
-    if ([key length])
+    SEL setter = NSSelectorFromString(setterString);
+    if ([self respondsToSelector:setter])
     {
-        SEL stringSetter = NSSelectorFromString([NSString stringWithFormat:@"set%@%@WithString:",
-                                                 [[key substringToIndex:1] uppercaseString],
-                                                 [key substringFromIndex:1]]);
-        
-        if ([self respondsToSelector:stringSetter])
+        objc_msgSend(self, setter, value);
+        return YES;
+    }
+    else
+    {
+        SEL setter = NSSelectorFromString([@"SC_" stringByAppendingString:setterString]);
+        if ([self respondsToSelector:setter])
         {
-            //call the setStringValue setter
-            objc_msgSend(self, stringSetter, value);
+            objc_msgSend(self, setter, value);
+            return YES;
         }
         else
         {
+            return NO;
+        }
+    }
+}
+
+- (void)setValueWithString:(NSString *)value forKey:(NSString *)key
+{
+    if ([key length])
+    {
+        NSString *setterString = [NSString stringWithFormat:@"set%@%@WithString:",
+                                                 [[key substringToIndex:1] uppercaseString],
+                                                 [key substringFromIndex:1]];
+        
+        if (![self SC_callSetter:setterString withValue:value])
+        {
             NSString *type = [self SC_typeNameForKey:key];
-            if (type)
+            if (!type)
             {
-                [self setValue:[value SC_valueForTypeName:type] forKey:key];
-            }
-            else
-            {
+                
 #ifdef DEBUG
-                [NSException raise:StringCodingErrorDomain format:@"StringCoding could not determine type of %@ property of %@. Implement the %@ method to manually set this property.", key, [self class], NSStringFromSelector(stringSetter)];
+                [NSException raise:StringCodingErrorDomain format:@"StringCoding could not determine type of %@ property of %@. Implement the %@ method to manually set this property.", key, [self class], setterString];
 #else
                 NSLog(@"Could not determine type for %@ property of %@", key, [self class]);
 #endif
+                
+            }
+            else
+            {
+                [self setValue:[value SC_valueForTypeName:type] forKey:key];
             }
         }
     }
 }
 
-- (void)setStringValue:(NSString *)value forKeyPath:(NSString *)keyPath
+- (void)setValueWithString:(NSString *)value forKeyPath:(NSString *)keyPath
 {
     NSMutableArray *parts = [[keyPath componentsSeparatedByString:@"."] mutableCopy];
     NSString *key = [parts lastObject];
@@ -321,25 +364,25 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     id object = [parts count]? [self valueForKeyPath:[parts componentsJoinedByString:@"."]]: self;
     if ([key hasPrefix:@"@"])
     {
-        [object setStringValue:value forKey:[key substringFromIndex:1]];
+        [object setValueWithString:value forKey:[key substringFromIndex:1]];
     }
     else if ([object isKindOfClass:[NSArray class]] || [object isKindOfClass:[NSSet class]])
     {
         for (id item in object)
         {
-            [item setStringValue:value forKey:key];
+            [item setValueWithString:value forKey:key];
         }
     }
     else if ([object isKindOfClass:[NSDictionary class]])
     {
         for (id item in [object allValues])
         {
-            [item setStringValue:value forKey:key];
+            [item setValueWithString:value forKey:key];
         }
     }
     else
     {
-        [object setStringValue:value forKey:key];
+        [object setValueWithString:value forKey:key];
     }
 }
 
@@ -552,7 +595,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
             }
             else
             {
-                size = [fontClass systemFontSize];
+                size = [self SC_systemFontSize];
             }
         }
         fontName = [parts componentsJoinedByString:@" "];
@@ -704,12 +747,18 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                 }
                 
                 //get value
-                if ([self respondsToSelector:NSSelectorFromString(getterName)])
+                SEL getter = NSSelectorFromString(getterName);
+                if ([self respondsToSelector:getter])
                 {
                     //return converted value
                     if ([type hasSuffix:@"Ref"])
                     {
-                        value = objc_msgSend(self, NSSelectorFromString(getterName));
+                        value = objc_msgSend(self, getter);
+                    }
+                    else if ([getterName isEqualToString:@"selectorValue"])
+                    {
+                        SEL selector = NSSelectorFromString(self);
+                        value = [NSValue valueWithPointer:selector];
                     }
                     else
                     {
@@ -751,7 +800,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         if ([self hasPrefix:@"0x"])
         {
             //hex value
-            unsigned result = 0;
+            unsigned int result = 0;
             NSScanner *scanner = [NSScanner scannerWithString:self];
             [scanner setScanLocation:2];
             [scanner scanHexInt:&result];
@@ -813,7 +862,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     return NSSelectorFromString(self);
 }
 
-- (NSURL *)NSURLValue
+- (NSURL *)SC_NSURLValueRelativeToURL:(NSURL *)baseURL
 {
     if ([self isAbsolutePath])
     {
@@ -823,9 +872,88 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     else if ([self length])
     {
         //arbitrary url
-        return [NSURL URLWithString:self relativeToURL:[[NSBundle mainBundle] resourceURL]];
+        return [NSURL URLWithString:self relativeToURL:baseURL ?: [[NSBundle mainBundle] resourceURL]];
     }
     return nil;
+}
+
+- (NSURL *)NSURLValue
+{
+    return [self SC_NSURLValueRelativeToURL:nil];
+}
+
+- (NSURLRequest *)SC_NSURLRequestValueRelativeToURL:(NSURL *)baseURL
+{
+    NSString *URLString = self;
+    NSArray *components = [self componentsSeparatedByString:@" "];
+    NSString *method = @"GET";
+    if ([components count] > 1)
+    {
+        static NSSet *methods = nil;
+        if (methods == nil)
+        {
+            methods = [[NSSet alloc] initWithArray:@[@"GET", @"PUT", @"POST", @"DELETE", @"HEAD", @"OPTIONS"]];
+        }
+        method = [components[0] uppercaseString];
+        if ([methods containsObject:method])
+        {
+            URLString = [[components subarrayWithRange:NSMakeRange(1, [components count] - 1)] componentsJoinedByString:@" "];
+        }
+        else
+        {
+            method = @"GET";
+        }
+    }
+    NSURL *URL = [URLString SC_NSURLValueRelativeToURL:baseURL];
+    if (URL)
+    {
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:URL];
+        request.HTTPMethod = method;
+        return request;
+    }
+    return nil;
+}
+
+- (NSURLRequest *)NSURLRequestValue
+{
+    return [self SC_NSURLRequestValueRelativeToURL:nil];
+}
+
+- (NSNumber *)NSNumberValue
+{
+    static NSNumberFormatter *formatter = nil;
+    if (formatter == nil)
+    {
+        formatter = [[NSNumberFormatter alloc] init];
+        formatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
+    }
+    NSNumber *number = [formatter numberFromString:self];
+    if (number)
+    {
+        return number;
+    }
+    else if ([self hasPrefix:@"0x"])
+    {
+        //hex value
+        unsigned long long result = 0;
+        NSScanner *scanner = [NSScanner scannerWithString:self];
+        [scanner setScanLocation:2];
+        [scanner scanHexLongLong:&result];
+        return @(result);
+    }
+    else
+    {
+        static NSSet *booleanValues = nil;
+        if (!booleanValues)
+        {
+            booleanValues = [[NSSet alloc] initWithArray:@[@"true", @"false", @"yes", @"no", @"y", @"n"]];
+        }
+        if ([booleanValues containsObject:[self lowercaseString]])
+        {
+            return @([self boolValue]);
+        }
+        return nil;
+    }
 }
 
 - (const char *)UTF8StringValue
@@ -929,6 +1057,12 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
 - (UIImage *)UIImageValue
 {
     return [self SC_imageValueOfClass:[UIImage class]];
+}
+
+- (CGFloat)SC_systemFontSize
+{
+    //systemFontSize returns 14 on iOS, which is clearly wrong
+    return 17.0f;
 }
 
 - (UIFont *)SC_fontValue
@@ -1496,6 +1630,11 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     return [self SC_imageValueOfClass:[NSImage class]];
 }
 
+- (CGFloat)SC_systemFontSize
+{
+    return [NSFont systemFontSize];
+}
+
 - (NSFont *)SC_fontValue
 {
     return [self NSFontValue];
@@ -1558,9 +1697,14 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
 
 @implementation CALayer (StringValues)
 
-- (void)setContentsWithString:(NSString *)string
+- (NSString *)SC_typeNameForKey:(NSString *)key
 {
-    self.contents = (id)[string CGImageValue];
+    static NSDictionary *types = nil;
+    if (types == nil)
+    {
+        types = @{@"contents": @"CGImageRef"};
+    }
+    return types[key] ?: [super SC_typeNameForKey:key];
 }
 
 @end
@@ -1664,30 +1808,64 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
 
 @end
 
+
+@interface SCActionTarget : NSObject
+
+@property (nonatomic, SC_weak) id sender;
+
+@end
+
+
+@implementation SCActionTarget
+
+- (id)forwardingTargetForSelector:(SEL)selector
+{
+    //find first object in responder chain that responds to selector
+    id responder = _sender;
+    while ((responder = [responder nextResponder]))
+    {
+        if ([responder respondsToSelector:selector])
+        {
+            return responder;
+        }
+        else if ([responder isKindOfClass:[UINavigationBar class]])
+        {
+            UINavigationController *controller = (UINavigationController *)[[responder nextResponder] nextResponder];
+            responder = [controller topViewController];
+            if ([responder respondsToSelector:selector])
+            {
+                return responder;
+            }
+        }
+    }
+    return nil;
+}
+
+@end
+
+
 @implementation UIControl (StringCoding)
 
-- (void)setStringValue:(NSString *)value forKey:(NSString *)key
+- (id)SC_actionTarget
+{
+    SCActionTarget *target = objc_getAssociatedObject(self, _cmd);
+    if (!target)
+    {
+        target = [[SCActionTarget alloc] init];
+        target.sender = self;
+        objc_setAssociatedObject(self, _cmd, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return target;
+}
+
+- (void)setValueWithString:(NSString *)value forKey:(NSString *)key
 {
     //handle target/action
     UIControlEvents event = [key UIControlEventsValue];
     if (event)
     {
-        NSArray *components = [value componentsSeparatedByString:@" "];
-        if ([components count])
-        {
-            SEL selector = [[components lastObject] selectorValue];
-            
-            //find first object in responder chain that responds to selector
-            id responder = self;
-            while ((responder = [responder nextResponder]))
-            {
-                if ([responder respondsToSelector:selector])
-                {
-                    [self addTarget:responder action:selector forControlEvents:event];
-                    break;
-                }
-            }
-        }
+        SEL selector = [value selectorValue];
+        [self addTarget:[self SC_actionTarget] action:selector forControlEvents:event];
         return;
     }
     
@@ -1716,7 +1894,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     }
     
     //default implementation
-    [super setStringValue:value forKey:key];
+    [super setValueWithString:value forKey:key];
 }
 
 @end
@@ -1801,31 +1979,6 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     return types[key] ?: [super SC_typeNameForKey:key];
 }
 
-- (void)setTitleTextAttributes:(NSDictionary *)attributes
-{
-    [self setTitleTextAttributes:attributes forState:UIControlStateNormal];
-}
-
-- (void)setNormalTitleTextAttributes:(NSDictionary *)attributes
-{
-    [self setTitleTextAttributes:attributes forState:UIControlStateNormal];
-}
-
-- (void)setHighlightedTitleTextAttributes:(NSDictionary *)attributes
-{
-    [self setTitleTextAttributes:attributes forState:UIControlStateHighlighted];
-}
-
-- (void)setSelectedTitleTextAttributes:(NSDictionary *)attributes
-{
-    [self setTitleTextAttributes:attributes forState:UIControlStateSelected];
-}
-
-- (void)setDisabledTitleTextAttributes:(NSDictionary *)attributes
-{
-    [self setTitleTextAttributes:attributes forState:UIControlStateDisabled];
-}
-
 @end
 
 @implementation UIBarButtonItem (StringValues)
@@ -1839,6 +1992,27 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                   @"landscapeImagePhoneInsets": @"UIEdgeInsets"};
     }
     return types[key] ?: [super SC_typeNameForKey:key];
+}
+
+- (id)SC_actionTarget
+{
+    SCActionTarget *target = objc_getAssociatedObject(self, _cmd);
+    if (!target)
+    {
+        target = [[SCActionTarget alloc] init];
+        target.sender = self;
+        objc_setAssociatedObject(self, _cmd, target, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return target;
+}
+
+- (void)SC_setActionWithString:(NSString *)string
+{
+    self.action = [string selectorValue];
+    if (!self.target)
+    {
+        self.target = [self SC_actionTarget];
+    }
 }
 
 //TODO: work out system for setting property for state, style AND metrics
@@ -1857,16 +2031,40 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     return types[key] ?: [super SC_typeNameForKey:key];
 }
 
-- (void)setFinishedSelectedImageWithString:(NSString *)string
+- (void)SC_setFinishedSelectedImageWithString:(NSString *)string
 {
     [self setFinishedSelectedImage:[string UIImageValue]
        withFinishedUnselectedImage:[self finishedUnselectedImage]];
 }
 
-- (void)setFinishedUnselectedImageWithString:(NSString *)string
+- (void)SC_setFinishedUnselectedImageWithString:(NSString *)string
 {
     [self setFinishedSelectedImage:[self finishedSelectedImage]
        withFinishedUnselectedImage:[string UIImageValue]];
+}
+
+@end
+
+@implementation UIWebView (StringValues)
+
+- (NSURL *)SC_baseURL
+{
+    return objc_getAssociatedObject(self, _cmd);
+}
+
+- (void)SC_setBaseURLWithString:(NSString *)string
+{
+    objc_setAssociatedObject(self, @selector(SC_baseURL), [string NSURLValue], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+- (void)SC_setRequestWithString:(NSString *)string
+{
+    [self loadRequest:[string SC_NSURLRequestValueRelativeToURL:[self SC_baseURL]]];
+}
+
+- (void)SC_setHTMLStringWithString:(NSString *)string
+{
+    [self loadHTMLString:string baseURL:[self SC_baseURL]];
 }
 
 @end

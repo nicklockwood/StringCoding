@@ -1,6 +1,6 @@
 StringCoding
 
-Version 1.1, April 17th, 2013
+Version 1.2, May 13th, 2013
 
 Copyright (C) 2012 Charcoal Design
 

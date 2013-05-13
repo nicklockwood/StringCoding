@@ -25,7 +25,9 @@ NOTE: 'Supported' means that the library has been tested with this version. 'Com
 ARC Compatibility
 ------------------
 
-StringCoding works correctly with both ARC and non-ARC targets. There is no need to exclude StringCoding files from the ARC validation process, or to convert StringCoding using the ARC conversion tool.
+As of version 1.2, StringCoding requires ARC. If you wish to use StringCoding in a non-ARC project, just add the -fobjc-arc compiler flag to the StringCoding.m file. To do this, go to the Build Phases tab in your target settings, open the Compile Sources group, double-click StringCoding.m in the list and type -fobjc-arc into the popover.
+
+If you wish to convert your whole project to ARC, comment out the #error line in StringCoding.m, then run the Edit > Refactor > Convert to Objective-C ARC... tool in Xcode and make sure all files that you wish to use ARC for (including StringCoding.m) are checked.
 
 
 Installation
@@ -39,12 +41,12 @@ NSObject Extension Methods
 
 StringCoding extends every object with the following additional methods:
 
-    - (void)setStringValue:(NSString *)value forKey:(NSString *)key;
-    - (void)setStringValue:(NSString *)value forKeyPath:(NSString *)keyPath;
+    - (void)setValueWithString:(NSString *)value forKey:(NSString *)key;
+    - (void)setValueWithString:(NSString *)value forKeyPath:(NSString *)keyPath;
     
 These methods work like the standard KVC setValue:forKey: and setValue:forKeyPath: methods except that the value is always a string and will automatically be converted to the correct type, provided that the type is known. Attempting to set a property of an unknown type will throw an exception. This can be fixed on a per case basis by adding a specific string setter method (see below).
 
-Note: By default, StringCoding swizzles `setValue:forKey:` and `setValue:forKeyPath:` to call the setStringValue equivalents when appropriate. This means that it is not neccesary for you to call setStringValue: explicitly unless you have disabled swizzling using the SC_SWIZZLE_ENABLED macro (see swizzling note below).
+Note: By default, StringCoding swizzles `setValue:forKey:` and `setValue:forKeyPath:` to call the setStringValue equivalents when appropriate. This means that it is not neccesary for you to call setValueWithString: explicitly unless you have disabled swizzling using the SC_SWIZZLE_ENABLED macro (see swizzling note below).
 
 
 NSString Extension Methods
@@ -71,6 +73,10 @@ Returns the char values of the string. The value is determined as follows: If th
     - (NSURL *)NSURLValue;
     
 Returns the NSURL value of the string. If the path is an absolute file path then it will be returned as a file URL, otherwise it will be returned as an ordinary URL. If the URL is a relative path then the baseURL property will be set as the app bundle resource directory. If the string is empty then it will return nil.
+
+    - (NSURL *)NSURLRequestValue;
+    
+Treats the string as an NSURL, using the same logic as for NSURLValue. The URL may optionally be preceeded by a REST method (GET, PUT, POST, DELETE, HEAD, OPTIONS) separated by a space. If the method is not included, it is assumed to be a GET request.
     
     - (CGPoint)CGPointValue;
     
@@ -115,7 +121,7 @@ Returns a UIImage, treating the string as a file name, path or URL. You can opti
     
     - (UIFont *)UIFontValue;
     
-Returns a UIFont using the same logic as for CGFontRefValue, with the additional feature that you can optionally specify the font size by adding a floating point value separatd by a space (e.g. "helvetica 17" or "bold 15"). If you do not specify a font size then the default system font size will be used.
+Returns a UIFont using the same logic as for CGFontRefValue, with the additional feature that you can optionally specify the font size by adding a floating point value separatd by a space (e.g. "helvetica 17" or "bold 15"). If you do not specify a font size then the default system font size will be used (this will be 13 points on Mac OS, and 17 points on iOS).
     
     - (UIEdgeInsets)UIEdgeInsetsValue;
     - (UIOffset)UIOffsetValue;
@@ -181,12 +187,12 @@ UIControl subclasses often have style properties that are associated to a partic
 
 StringCoding supports this type of styling using pseudo properties. To set the title color for UIControlStateNormal, you can use either of the following:
 
-    [control setStringValue:@"red" forKey:@"titleColor"];
-    [control setStringValue:@"red" forKey:@"normalTitleColor"];
+    [control setValueWithString:@"red" forKey:@"titleColor"];
+    [control setValueWithString:@"red" forKey:@"normalTitleColor"];
     
 To set the color for the selected state, you would use:
 
-    [control setStringValue:@"red" forKey:@"selectedTitleColor"];
+    [control setValueWithString:@"red" forKey:@"selectedTitleColor"];
 
 And so on. The key in this case *is* case sensitive. This is only a virtual property, not a real one, so you can't set it using:
 
@@ -194,12 +200,12 @@ And so on. The key in this case *is* case sensitive. This is only a virtual prop
     [control setSelectedTitleColor:[UIColor redColor]]; //nor this
 
 
-UIControl action binding
----------------------------
+UIControl target/action binding
+--------------------------------
 
 To bind an action to a control using a string, you can make use of some pseudo properties provided by StringCoding. For example, to bind a selector called "showAlert:" to the UIControlEventTouchUpInside, you can say:
 
-    [control setStringValue:@"alert:" forKey:@"touchupinside"];
+    [control setValueWithString:@"alert:" forKey:@"touchupinside"];
 
 As with other constants, the key is case insensitive and can use the fully qualified (e.g.. "UIControlEventTouchUpInside") or shorthand version. This is only a virtual property, not a real one, so you can't set it using:
 
@@ -210,9 +216,26 @@ However, assuming you've not disabled swizzling, it can be set using `setValue:f
 
     [control setValue:@"alert:" forKey:@"touchupinside"];
 
-If you've been paying attention you might wonder how to set the *target* for the action. There is no way to set this explcitly, however it will be determined automatically from the responder chain, so the first containing UIResponder (i.e. UIView, UIViewController) in the chain that responds to the specified selector will receive the message. 
+If you've been paying attention you might wonder how to set the *target* for the action. The target is set as a special proxy class that will determine the target automatically from the responder chain at runtime, so the first containing UIResponder (i.e. UIView or UIViewController) in the chain that responds to the specified selector will receive the message. If the view hierarchy changes, the target will be recalculated.
 
-**Note:** this means that you should wait to apply the action until after the view has been added to the controller in question, and if the view is detached and added to another controller, the action should be re-applied.
+
+Special Case Setters
+---------------------------
+
+In addition to the standard string setter extension behaviours, StringCoding also includes some special-case pseudo properties for UIKit classes that can be uses to set values using setValueWithString:forKey: 
+
+    UITabBarItem
+        finishedSelectedImage
+        finishedUnselectedImage
+        
+These properties can be used to set the finished (i.e. post-processed) tab bar images.
+
+    UIWebView
+        request
+        HTMLString
+        baseURL
+        
+These properties can be used to load a specific request URL, HTML string or data object into a web view using a string setter. The optional baseURL is used as a relative value for any subsequent request, HTML or data values set.  
 
 
 Adding Support for Additional String Properties and Types
@@ -230,7 +253,7 @@ To support Core Foundation object types, omit the "Ref", so for a type like CGFo
 
     - (CGFooRef)CGFooValue;
     
-Any property of this type on any object will now automatically be settable using a string value via the setStringValue:forKey: method. If the property type is unknown then this won't work however. StringCoding will automatically detect and support properties added via categories or subclasses, however it may not always be able to determine the type.
+Any property of this type on any object will now automatically be settable using a string value via the setValueWithString:forKey: method. If the property type is unknown then this won't work however. StringCoding will automatically detect and support properties added via categories or subclasses, however it may not always be able to determine the type.
 
 For example, the contents property of CALayer is supposed to be an image, but is defined as an id, so StringCoder can't determine the type automatically. This also applies to properties that expect a constant value, as the type appears as integer or string.
 
@@ -242,7 +265,7 @@ So in the case of the CALayer contents property, the method is defined as:
 
     - (void)setContentsAsString:(NSString *)stringValue;
 
-The implementation treats the value as an image. The setStringValue:forKey: method detects the presence of this method automatically and calls it instead of the default implementation.
+The implementation treats the value as an image. The setValueWithString:forKey: method detects the presence of this method automatically and calls it instead of the default implementation.
 
 
 Swizzling

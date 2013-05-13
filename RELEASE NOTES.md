@@ -1,3 +1,14 @@
+Version 1.2
+
+- StringCoding now requires ARC. See README for details
+- Renamed NSObject category methods setStringValue:forKey: and setStringValue:forKeyPath: to setValueWithString:forKey: and setValueWithString:forKeyPath:
+- Fixed bug when handling Core Foundation object types
+- Added NSURLRequestValue getter to NSString category
+- Added NSNumberValue getter to NSString category
+- Added additional special-case setters
+- Smarter target/action binding
+- Now handles actions for UIBarButtonItems
+
 Version 1.1
 
 - Now swizzles setValue:forKey: and setValue:forKeyPath: so string coding support works automatically. This makes it possible to set string values via Interface Builder, amongst other things
