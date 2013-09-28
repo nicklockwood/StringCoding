@@ -1,7 +1,7 @@
 //
 //  StringCoding.m
 //
-//  Version 1.2
+//  Version 1.2.1
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -44,8 +44,7 @@
 #import <Availability.h>
 #undef SC_weak
 #if __has_feature(objc_arc_weak) && \
-(!(defined __MAC_OS_X_VERSION_MIN_REQUIRED) || \
-__MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_8)
+(TARGET_OS_IPHONE || __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_8)
 #define SC_weak weak
 #else
 #define SC_weak unsafe_unretained
@@ -145,7 +144,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                 if (strlen(typeEncoding) >= 3 && typeEncoding[0] == '@')
                 {
                     char *className = strndup(typeEncoding + 2, strlen(typeEncoding) - 3);
-                    class = [NSString stringWithUTF8String:className];
+                    class = @(className);
                     NSRange range = [class rangeOfString:@"<"];
                     if (range.location != NSNotFound)
                     {
@@ -309,7 +308,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     SEL setter = NSSelectorFromString(setterString);
     if ([self respondsToSelector:setter])
     {
-        objc_msgSend(self, setter, value);
+        ((void (*)(id, SEL, id))objc_msgSend)(self, setter, value);
         return YES;
     }
     else
@@ -317,7 +316,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         SEL setter = NSSelectorFromString([@"SC_" stringByAppendingString:setterString]);
         if ([self respondsToSelector:setter])
         {
-            objc_msgSend(self, setter, value);
+            ((void (*)(id, SEL, id))objc_msgSend)(self, setter, value);
             return YES;
         }
         else
@@ -338,20 +337,15 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         if (![self SC_callSetter:setterString withValue:value])
         {
             NSString *type = [self SC_typeNameForKey:key];
-            if (!type)
-            {
-                
+            if (type) value = [value SC_valueForTypeName:type];
+            
 #ifdef DEBUG
-                [NSException raise:StringCodingErrorDomain format:@"StringCoding could not determine type of %@ property of %@. Implement the %@ method to manually set this property.", key, [self class], setterString];
-#else
-                NSLog(@"Could not determine type for %@ property of %@", key, [self class]);
+            
+            else NSLog(@"Could not determine type for %@ property of %@", key, [self class]);
 #endif
-                
-            }
-            else
-            {
-                [self setValue:[value SC_valueForTypeName:type] forKey:key];
-            }
+            
+            [self setValue:value forKey:key];
+
         }
     }
 }
@@ -445,7 +439,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         SEL selector = NSSelectorFromString(@"stretchableImageWithLeftCapWidth:topCapHeight:");
         if (selector)
         {
-            image = objc_msgSend(image, selector, leftCapWidth, topCapHeight);
+            image = ((id (*)(id, SEL, NSInteger, NSInteger))objc_msgSend)(image, selector, leftCapWidth, topCapHeight);
         }
     }
     return image;
@@ -612,7 +606,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                 SEL selector = NSSelectorFromString(@"italicSystemFontOfSize:");
                 if ([fontClass respondsToSelector:selector])
                 {
-                    return objc_msgSend(fontClass, selector, size);
+                    return ((id (*)(id, SEL, CGFloat))objc_msgSend)(fontClass, selector, size);
                 }
                 return [fontClass systemFontOfSize:size];
             }
@@ -753,7 +747,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
                     //return converted value
                     if ([type hasSuffix:@"Ref"])
                     {
-                        value = objc_msgSend(self, getter);
+                        value = ((id (*)(id, SEL))objc_msgSend)(self, getter);
                     }
                     else if ([getterName isEqualToString:@"selectorValue"])
                     {
@@ -1888,7 +1882,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         if ([self respondsToSelector:selector])
         {
             NSString *type = [self SC_typeNameForKey:[NSString stringWithFormat:@"current%@", name]];
-            if (type) objc_msgSend(self, selector, [value SC_valueForTypeName:type], state);
+            if (type) ((id (*)(id, SEL, id, UIControlState))objc_msgSend)(self, selector, [value SC_valueForTypeName:type], state);
             return;
         }
     }

@@ -1,7 +1,7 @@
 //
 //  StringCoding.h
 //
-//  Version 1.2
+//  Version 1.2.1
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -76,7 +76,7 @@ extern NSString *const StringCodingErrorDomain;
 - (NSTextAlignment)NSTextAlignmentValue;
 - (NSLineBreakMode)NSLineBreakModeValue;
 
-#ifdef __IPHONE_OS_VERSION_MAX_ALLOWED
+#if TARGET_OS_IPHONE
 
 - (UIColor *)UIColorValue;
 - (UIImage *)UIImageValue;

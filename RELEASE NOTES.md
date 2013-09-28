@@ -1,3 +1,9 @@
+Version 1.2.1
+
+- Added explicit function pointer casts for all obc_msgSend calls
+- Now complies with the -Wextra warning level
+- Added podspec
+
 Version 1.2
 
 - StringCoding now requires ARC. See README for details
