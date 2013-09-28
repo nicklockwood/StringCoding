@@ -133,7 +133,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         {
             unsigned int count;
             objc_property_t *properties = class_copyPropertyList(class, &count);
-            for (int i = 0; i < count; i++)
+            for (unsigned int i = 0; i < count; i++)
             {
                 objc_property_t property = properties[i];
                 const char *name = property_getName(property);
