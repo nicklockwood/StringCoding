@@ -2,7 +2,7 @@ Pod::Spec.new do |s|
   s.name     = 'StringCoding'
   s.version  = '1.2.1'
   s.license  = 'zlib'
-  s.summary  = 'Set object properties of any type using string values.'
+  s.summary  = 'Simple library for setting object properties of any type using string values. Great for configuration files.'
   s.homepage = 'https://github.com/nicklockwood/StringCoding'
   s.authors  = 'Nick Lockwood'
   s.source   = { :git => 'https://github.com/nicklockwood/StringCoding.git', :tag => '1.2.1' }
