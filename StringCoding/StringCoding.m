@@ -1882,7 +1882,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         if ([self respondsToSelector:selector])
         {
             NSString *type = [self SC_typeNameForKey:[NSString stringWithFormat:@"current%@", name]];
-            if (type) ((id (*)(id, SEL, id, UIControlState))objc_msgSend)(self, selector, [value SC_valueForTypeName:type], state);
+            if (type) ((void (*)(id, SEL, id, UIControlState))objc_msgSend)(self, selector, [value SC_valueForTypeName:type], state);
             return;
         }
     }
