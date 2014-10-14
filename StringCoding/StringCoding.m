@@ -1,7 +1,7 @@
 //
 //  StringCoding.m
 //
-//  Version 1.2.1
+//  Version 1.2.2
 //
 //  Created by Nick Lockwood on 05/02/2012.
 //  Copyright (c) 2012 Charcoal Design
@@ -35,6 +35,14 @@
 #import <objc/runtime.h>
 
 
+#pragma GCC diagnostic ignored "-Wgnu"
+#pragma GCC diagnostic ignored "-Wselector"
+#pragma GCC diagnostic ignored "-Wconversion"
+#pragma GCC diagnostic ignored "-Wfloat-equal"
+#pragma GCC diagnostic ignored "-Wformat-non-iso"
+#pragma GCC diagnostic ignored "-Wmissing-prototypes"
+
+
 #import <Availability.h>
 #if !__has_feature(objc_arc)
 #error This class requires automatic reference counting
@@ -42,6 +50,7 @@
 
 
 #import <Availability.h>
+#import <TargetConditionals.h>
 #undef SC_weak
 #if __has_feature(objc_arc_weak) && \
 (TARGET_OS_IPHONE || __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_8)
@@ -113,56 +122,49 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
 
 - (NSString *)SC_typeNameForKey:(NSString *)key
 {
-    //create cache
-    static NSMutableDictionary *cacheByClass = nil;
-    if (cacheByClass == nil)
-    {
-        cacheByClass = [[NSMutableDictionary alloc] init];
-    }
-    NSString *className = NSStringFromClass([self class]);
-    NSMutableDictionary *cache = cacheByClass[className];
+    //check cache
+    NSMutableDictionary *cache = objc_getAssociatedObject([self class], _cmd);
     if (cache == nil)
     {
         //create cache
         cache = [[NSMutableDictionary alloc] init];
-        cacheByClass[className] = cache;
+        objc_setAssociatedObject([self class], _cmd, cache, OBJC_ASSOCIATION_RETAIN);
         
         //prepopulate with property types
-        Class class = [self class];
-        while (true)
+        Class objectClass = [self class];
+        while (objectClass != [NSObject class])
         {
             unsigned int count;
-            objc_property_t *properties = class_copyPropertyList(class, &count);
+            objc_property_t *properties = class_copyPropertyList(objectClass, &count);
             for (unsigned int i = 0; i < count; i++)
             {
                 objc_property_t property = properties[i];
-                const char *name = property_getName(property);
+                NSString *propertyName = @(property_getName(property));
                 
                 //get class
-                NSString *class = nil;
+                NSString *type = nil;
                 char *typeEncoding = property_copyAttributeValue(property, "T");
                 if (strlen(typeEncoding) >= 3 && typeEncoding[0] == '@')
                 {
                     char *className = strndup(typeEncoding + 2, strlen(typeEncoding) - 3);
-                    class = @(className);
-                    NSRange range = [class rangeOfString:@"<"];
+                    type = @(className);
+                    NSRange range = [type rangeOfString:@"<"];
                     if (range.location != NSNotFound)
                     {
                         //TODO: better handling of protocols
-                        class = [class substringToIndex:range.location];
+                        type = [type substringToIndex:range.location];
                     }
-                    class = NSStringFromClass(NSClassFromString(class));
+                    type = NSStringFromClass(NSClassFromString(type));
                     free(className);
                 }
                 free(typeEncoding);
                 
                 //set type
-                if (class) cache[@(name)] = class;
+                if (type) cache[propertyName] = type;
             }
             free(properties);
             
-            if (class == [NSObject class]) break;
-            class = [class superclass];
+            objectClass = [objectClass superclass];
         }
     }
     
@@ -313,7 +315,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     }
     else
     {
-        SEL setter = NSSelectorFromString([@"SC_" stringByAppendingString:setterString]);
+        setter = NSSelectorFromString([@"SC_" stringByAppendingString:setterString]);
         if ([self respondsToSelector:setter])
         {
             ((void (*)(id, SEL, id))objc_msgSend)(self, setter, value);
@@ -643,15 +645,15 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         components = [value componentsSeparatedByString:@" "];
     }
     NSUInteger values = 0;
-    for (NSString *value in components)
+    for (value in components)
     {
         if ([value hasPrefix:prefix])
         {
-            values |= [maskValuesByKey[[value substringFromIndex:[prefix length]]] intValue];
+            values |= (NSUInteger)[maskValuesByKey[[value substringFromIndex:[prefix length]]] integerValue];
         }
         else
         {
-            values |= [maskValuesByKey[value] integerValue];
+            values |= (NSUInteger)[maskValuesByKey[value] integerValue];
         }
     }
     return values;
@@ -794,13 +796,13 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
         if ([self hasPrefix:@"0x"])
         {
             //hex value
-            unsigned int result = 0;
+            unsigned result = 0;
             NSScanner *scanner = [NSScanner scannerWithString:self];
             [scanner setScanLocation:2];
             [scanner scanHexInt:&result];
-            return result;
+            return (char)result;
         }
-        NSInteger number = [self intValue];
+        char number = (char)[self intValue];
         if (number)
         {
             //decimal
@@ -812,7 +814,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     else
     {
         //single character
-        return MIN(255, [self characterAtIndex:0]);
+        return MIN(255, (char)[self characterAtIndex:0]);
     }
 }
 
@@ -1815,7 +1817,7 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
 - (id)forwardingTargetForSelector:(SEL)selector
 {
     //find first object in responder chain that responds to selector
-    id responder = _sender;
+    __strong id responder = self.sender;
     while ((responder = [responder nextResponder]))
     {
         if ([responder respondsToSelector:selector])
@@ -2025,6 +2027,9 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     return types[key] ?: [super SC_typeNameForKey:key];
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+
 - (void)SC_setFinishedSelectedImageWithString:(NSString *)string
 {
     [self setFinishedSelectedImage:[string UIImageValue]
@@ -2036,6 +2041,8 @@ static void SC_swizzleInstanceMethod(Class c, SEL original, SEL replacement)
     [self setFinishedSelectedImage:[self finishedSelectedImage]
        withFinishedUnselectedImage:[string UIImageValue]];
 }
+
+#pragma GCC diagnostic pop
 
 @end
 

@@ -33,7 +33,6 @@
 		019D9CC3171C2EB0000E8594 /* UIConfig-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "UIConfig-Info.plist"; sourceTree = "<group>"; };
 		019D9CC5171C2EB0000E8594 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		019D9CC7171C2EB0000E8594 /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
-		019D9CC9171C2EB0000E8594 /* UIConfig-Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "UIConfig-Prefix.pch"; sourceTree = "<group>"; };
 		019D9CCA171C2EB0000E8594 /* AppDelegate.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = AppDelegate.h; sourceTree = "<group>"; };
 		019D9CCB171C2EB0000E8594 /* AppDelegate.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = AppDelegate.m; sourceTree = "<group>"; };
 		019D9CCD171C2EB0000E8594 /* Default.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = Default.png; sourceTree = "<group>"; };
@@ -113,7 +112,6 @@
 				019D9CC3171C2EB0000E8594 /* UIConfig-Info.plist */,
 				019D9CC4171C2EB0000E8594 /* InfoPlist.strings */,
 				019D9CC7171C2EB0000E8594 /* main.m */,
-				019D9CC9171C2EB0000E8594 /* UIConfig-Prefix.pch */,
 				019D9CCD171C2EB0000E8594 /* Default.png */,
 				019D9CCF171C2EB0000E8594 /* Default@2x.png */,
 				019D9CD1171C2EB0000E8594 /* Default-568h@2x.png */,
@@ -288,7 +286,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
-				GCC_PREFIX_HEADER = "UIConfig/UIConfig-Prefix.pch";
 				INFOPLIST_FILE = "UIConfig/UIConfig-Info.plist";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = app;
@@ -299,7 +296,6 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
-				GCC_PREFIX_HEADER = "UIConfig/UIConfig-Prefix.pch";
 				INFOPLIST_FILE = "UIConfig/UIConfig-Info.plist";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				WRAPPER_EXTENSION = app;

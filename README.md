@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/nicklockwood/StringCoding.svg)](https://travis-ci.org/nicklockwood/StringCoding)
+
+
 Purpose
 --------------
 
@@ -15,8 +18,8 @@ Check out the included UIConfig example to see some of StringCoding's capabiliti
 Supported iOS & SDK Versions
 -----------------------------
 
-* Supported build target - iOS 7.0 / Mac OS 10.8 (Xcode 5.0, Apple LLVM compiler 5.0)
-* Earliest supported deployment target - iOS 5.0 / Mac OS 10.7
+* Supported build target - iOS 8.0 / Mac OS 10.9 (Xcode 6.0, Apple LLVM compiler 6.0)
+* Earliest supported deployment target - iOS 6.0 / Mac OS 10.7
 * Earliest compatible deployment target - iOS 4.3 / Mac OS 10.6
 
 NOTE: 'Supported' means that the library has been tested with this version. 'Compatible' means that the library should work on this iOS version (i.e. it doesn't rely on any unavailable SDK features) but is no longer being tested for compatibility and may require tweaking or bug fixes to run correctly.
@@ -278,3 +281,42 @@ By default, StringCoding swizzles the `setValue:forKey:` and `setValue:forKeyPat
 Or if you prefer, add this to your prefix.pch file:
 
     #define SC_SWIZZLE_ENABLED 0
+
+
+Release notes
+------------------
+
+Version 1.2.2
+
+- Fixed imports for Xcode 6 
+- Now complies with the -Weverything warning level
+
+Version 1.2.1
+
+- Added explicit function pointer casts for all obc_msgSend calls
+- Now complies with the -Wextra warning level
+- Added podspec
+
+Version 1.2
+
+- StringCoding now requires ARC. See README for details
+- Renamed NSObject category methods setStringValue:forKey: and setStringValue:forKeyPath: to setValueWithString:forKey: and setValueWithString:forKeyPath:
+- Fixed bug when handling Core Foundation object types
+- Added NSURLRequestValue getter to NSString category
+- Added NSNumberValue getter to NSString category
+- Added additional special-case setters
+- Smarter target/action binding
+- Now handles actions for UIBarButtonItems
+
+Version 1.1
+
+- Now swizzles setValue:forKey: and setValue:forKeyPath: so string coding support works automatically. This makes it possible to set string values via Interface Builder, amongst other things
+- Now supports target/action binding on UIControls via string (the string represents a selector that will automatically be sent to the first object in the responder chain that responds to it)
+- Now supports setValue:forState: values on UIControls
+- Added support for many UIKit constants and view/control types
+- More robust type detection logic
+- Added UIConfig example
+
+Version 1.0
+
+- Initial release
